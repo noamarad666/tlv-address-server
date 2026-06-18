@@ -3,7 +3,6 @@ const fetch = require('node-fetch');
 const app = express();
 app.use(express.json());
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const PORT = process.env.PORT || 3000;
 
 app.get('/', (req, res) => res.send('TLV Address Server running'));
@@ -11,19 +10,14 @@ app.get('/', (req, res) => res.send('TLV Address Server running'));
 app.post('/extract', async (req, res) => {
   const { url, text } = req.body;
   console.log('--- /extract called ---');
-  console.log('url:', url);
-  console.log('text:', text ? text.substring(0, 100) : null);
-  console.log('API key length:', ANTHROPIC_API_KEY ? ANTHROPIC_API_KEY.length : 0);
 
   if (!url && !text) {
-    console.log('ERROR: no url or text');
     return res.status(400).json({ error: 'url or text required' });
   }
 
   let postText = text || '';
 
   if (url && !postText) {
-    console.log('Fetching URL:', url);
     try {
       const response = await fetch(url, {
         headers: {
@@ -33,9 +27,7 @@ app.post('/extract', async (req, res) => {
         redirect: 'follow',
         timeout: 10000
       });
-      console.log('Fetch status:', response.status);
       const html = await response.text();
-      console.log('HTML length:', html.length);
 
       const ogMatch = html.match(/property="og:description"\s+content="([^"]{10,1000})"/i)
                    || html.match(/og:description"\s+content="([^"]{10,1000})"/i)
@@ -47,10 +39,11 @@ app.post('/extract', async (req, res) => {
           .replace(/&quot;/g, '"')
           .replace(/&#039;/g, "'")
           .replace(/&lt;/g, '<')
-          .replace(/&gt;/g, '>');
-        console.log('Extracted postText:', postText.substring(0, 100));
+          .replace(/&gt;/g, '>')
+          .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+          .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
+        console.log('postText:', postText.substring(0, 150));
       } else {
-        console.log('No og:description found');
         return res.json({ address: null, reason: 'Could not extract post text from URL' });
       }
     } catch (e) {
@@ -59,41 +52,36 @@ app.post('/extract', async (req, res) => {
     }
   }
 
-  console.log('Calling Claude with text:', postText.substring(0, 100));
-  try {
-    const claudeRes = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 50,
-        messages: [{
-          role: 'user',
-          content: `Extract only the street name or address from this apartment listing. Reply with just the street name, nothing else. If no address found reply NOT_FOUND.\n\n${postText.substring(0, 500)}`
-        }]
-      })
-    });
+  const address = extractAddress(postText);
+  console.log('Extracted address:', address);
 
-    console.log('Claude response status:', claudeRes.status);
-    const data = await claudeRes.json();
-    console.log('Claude response:', JSON.stringify(data).substring(0, 200));
-
-    const address = data.content?.[0]?.text?.trim();
-    if (!address || address === 'NOT_FOUND') {
-      return res.json({ address: null, reason: 'No address found', postText });
-    }
-
-    console.log('Returning address:', address);
+  if (address) {
     return res.json({ address });
-
-  } catch (e) {
-    console.log('Claude error:', e.message);
-    return res.status(500).json({ error: 'Claude API failed: ' + e.message });
+  } else {
+    return res.json({ address: null, reason: 'No address found', postText: postText.substring(0, 200) });
   }
 });
+
+function extractAddress(text) {
+  const keywords = ['רחוב ', "רח' ", 'שדרות ', 'סמטת ', ' on ', ' at '];
+  const cityWords = ['תל', 'אביב', 'tel', 'aviv', 'israel', 'ישראל'];
+
+  for (const kw of keywords) {
+    const idx = text.indexOf(kw) !== -1 ? text.indexOf(kw) : text.toLowerCase().indexOf(kw.toLowerCase());
+    if (idx === -1) continue;
+
+    const after = text.substring(idx + kw.length).trim();
+    const chunk = after.split(/[\n\(\-]/)[0].trim();
+    let words = chunk.split(/\s+/).slice(0, 3);
+
+    while (words.length > 0 && cityWords.includes(words[words.length - 1].toLowerCase().replace(/[,.]/g, ''))) {
+      words.pop();
+    }
+
+    const result = words.join(' ').replace(/[,.]+$/, '').trim();
+    if (result.length > 1) return result;
+  }
+  return null;
+}
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
