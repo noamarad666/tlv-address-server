@@ -63,7 +63,18 @@ app.post('/extract', async (req, res) => {
 });
 
 function extractAddress(text) {
-  const keywords = ['רחוב ', "רח' ", 'שדרות ', 'סמטת ', ' on ', ' at '];
+  const keywords = [
+    'ברחוב ',    // Hebrew: in the street (most common in posts)
+    'רחוב ',     // Hebrew: street
+    "ברח' ",     // Hebrew: in street abbrev
+    "רח' ",      // Hebrew: street abbrev
+    'בשדרות ',   // Hebrew: in the boulevard
+    'שדרות ',    // Hebrew: boulevard
+    'בסמטת ',    // Hebrew: in the alley
+    'סמטת ',     // Hebrew: alley
+    ' on ',      // English
+    ' at ',      // English
+  ];
   const cityWords = ['תל', 'אביב', 'tel', 'aviv', 'israel', 'ישראל'];
 
   for (const kw of keywords) {
@@ -71,9 +82,11 @@ function extractAddress(text) {
     if (idx === -1) continue;
 
     const after = text.substring(idx + kw.length).trim();
-    const chunk = after.split(/[\n\(\-]/)[0].trim();
+    // Stop at newline, dash, open paren, or period
+    const chunk = after.split(/[\n\(\-\.!]/)[0].trim();
     let words = chunk.split(/\s+/).slice(0, 3);
 
+    // Drop trailing city words
     while (words.length > 0 && cityWords.includes(words[words.length - 1].toLowerCase().replace(/[,.]/g, ''))) {
       words.pop();
     }
