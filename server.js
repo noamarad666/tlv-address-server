@@ -42,7 +42,7 @@ app.post('/extract', async (req, res) => {
           .replace(/&gt;/g, '>')
           .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
           .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)));
-        console.log('postText:', postText.substring(0, 150));
+        console.log('postText:', postText.substring(0, 200));
       } else {
         return res.json({ address: null, reason: 'Could not extract post text from URL' });
       }
@@ -62,39 +62,56 @@ app.post('/extract', async (req, res) => {
   }
 });
 
+const DESCRIPTIVE_WORDS = new Set([
+  'שקט', 'שקטה', 'שקטים', 'שקטה,', 'פסטורלי', 'פסטורלית', 'יפה', 'יפהפה',
+  'נחמד', 'נחמדה', 'מקסים', 'מקסימה', 'צדדי', 'צדדית', 'ירוק', 'ירוקה',
+  'מרכזי', 'מרכזית', 'נעים', 'נעימה', 'קטן', 'קטנה', 'גדול', 'גדולה',
+  'quiet', 'lovely', 'nice', 'beautiful', 'calm', 'green', 'central', 'small'
+]);
+
 function extractAddress(text) {
   const keywords = [
-    'ברחוב ',    // Hebrew: in the street (most common in posts)
-    'רחוב ',     // Hebrew: street
-    "ברח' ",     // Hebrew: in street abbrev
-    "רח' ",      // Hebrew: street abbrev
-    'בשדרות ',   // Hebrew: in the boulevard
-    'שדרות ',    // Hebrew: boulevard
-    'בסמטת ',    // Hebrew: in the alley
-    'סמטת ',     // Hebrew: alley
-    ' on ',      // English
-    ' at ',      // English
+    'ברחוב ', 'רחוב ', "ברח' ", "רח' ",
+    'בשדרות ', 'שדרות ', 'בסמטת ', 'סמטת ',
+    ' on ', ' at '
   ];
-  const cityWords = ['תל', 'אביב', 'tel', 'aviv', 'israel', 'ישראל'];
+  const cityWords = new Set(['תל', 'אביב', 'tel', 'aviv', 'israel', 'ישראל']);
+
+  const candidates = [];
 
   for (const kw of keywords) {
-    const idx = text.indexOf(kw) !== -1 ? text.indexOf(kw) : text.toLowerCase().indexOf(kw.toLowerCase());
-    if (idx === -1) continue;
+    let start = 0;
+    const haystack = text.includes(kw) ? text : text.toLowerCase();
+    const needle = text.includes(kw) ? kw : kw.toLowerCase();
 
-    const after = text.substring(idx + kw.length).trim();
-    // Stop at newline, dash, open paren, or period
-    const chunk = after.split(/[\n\(\-\.!]/)[0].trim();
-    let words = chunk.split(/\s+/).slice(0, 3);
+    while (true) {
+      const idx = haystack.indexOf(needle, start);
+      if (idx === -1) break;
 
-    // Drop trailing city words
-    while (words.length > 0 && cityWords.includes(words[words.length - 1].toLowerCase().replace(/[,.]/g, ''))) {
-      words.pop();
+      const after = text.substring(idx + kw.length).trim();
+      const chunk = after.split(/[\n\(\-\.!,]/)[0].trim();
+      let words = chunk.split(/\s+/).slice(0, 3);
+
+      while (words.length > 0 && cityWords.has(words[words.length - 1].toLowerCase().replace(/[,.]/g, ''))) {
+        words.pop();
+      }
+
+      if (words.length > 0) {
+        const result = words.join(' ').replace(/[,.]+$/, '').trim();
+        if (result.length > 1) {
+          const hasDescriptive = words.some(w => DESCRIPTIVE_WORDS.has(w.replace(/[,.!]/g, '')));
+          let score = hasDescriptive ? 10 : 0;
+          score += idx * 0.0001; // slight preference for earlier matches
+          candidates.push({ score, result });
+        }
+      }
+      start = idx + 1;
     }
-
-    const result = words.join(' ').replace(/[,.]+$/, '').trim();
-    if (result.length > 1) return result;
   }
-  return null;
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.score - b.score);
+  return candidates[0].result;
 }
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
