@@ -62,20 +62,28 @@ app.post('/extract', async (req, res) => {
   }
 });
 
-const DESCRIPTIVE_WORDS = new Set([
-  'שקט', 'שקטה', 'שקטים', 'שקטה,', 'פסטורלי', 'פסטורלית', 'יפה', 'יפהפה',
-  'נחמד', 'נחמדה', 'מקסים', 'מקסימה', 'צדדי', 'צדדית', 'ירוק', 'ירוקה',
-  'מרכזי', 'מרכזית', 'נעים', 'נעימה', 'קטן', 'קטנה', 'גדול', 'גדולה',
+// Stems instead of exact words, so variants like "השקטה"/"הירוקה" are also caught
+const DESCRIPTIVE_STEMS = [
+  'שקט', 'פסטורל', 'יפ', 'נחמד', 'מקסים', 'צדדי', 'ירוק', 'מרכזי', 'נעים', 'קטנ', 'גדול',
   'quiet', 'lovely', 'nice', 'beautiful', 'calm', 'green', 'central', 'small'
-]);
+];
+
+function isDescriptive(word) {
+  let w = word.replace(/[,.!"']/g, '').toLowerCase();
+  // Strip Hebrew definite article prefix (ה-) before matching stems
+  let wNoPrefix = (w.startsWith('\u05D4') && w.length > 2) ? w.substring(1) : w;
+  return DESCRIPTIVE_STEMS.some(stem => w.startsWith(stem) || wNoPrefix.startsWith(stem));
+}
 
 function extractAddress(text) {
   const keywords = [
     'ברחוב ', 'רחוב ', "ברח' ", "רח' ",
-    'בשדרות ', 'שדרות ', 'בסמטת ', 'סמטת ',
+    'בשדרות ', 'שדרות ', "בשד' ", "שד' ", 'בשדרה ', 'שדרה ',
+    'בסמטת ', 'סמטת ',
     ' on ', ' at '
   ];
-  const cityWords = new Set(['תל', 'אביב', 'tel', 'aviv', 'israel', 'ישראל']);
+  // Includes ת"א and variants for "Tel Aviv" abbreviation
+  const cityWords = new Set(['תל', 'אביב', 'ת"א', 'תל-אביב', 'tel', 'aviv', 'israel', 'ישראל']);
 
   const candidates = [];
 
@@ -92,16 +100,18 @@ function extractAddress(text) {
       const chunk = after.split(/[\n\(\-\.!,]/)[0].trim();
       let words = chunk.split(/\s+/).slice(0, 3);
 
-      while (words.length > 0 && cityWords.has(words[words.length - 1].toLowerCase().replace(/[,.]/g, ''))) {
-        words.pop();
+      while (words.length > 0) {
+        const cleaned = words[words.length - 1].replace(/[,.!"']/g, '');
+        if (cityWords.has(cleaned)) words.pop();
+        else break;
       }
 
       if (words.length > 0) {
         const result = words.join(' ').replace(/[,.]+$/, '').trim();
         if (result.length > 1) {
-          const hasDescriptive = words.some(w => DESCRIPTIVE_WORDS.has(w.replace(/[,.!]/g, '')));
+          const hasDescriptive = words.some(w => isDescriptive(w));
           let score = hasDescriptive ? 10 : 0;
-          score += idx * 0.0001; // slight preference for earlier matches
+          score += idx * 0.0001;
           candidates.push({ score, result });
         }
       }
